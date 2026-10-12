@@ -1,0 +1,10 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+runs/
+*.db
+*.db-wal
+*.db-shm
+.env
+.vscode/

@@ -1,0 +1,43 @@
+{
+  "database": "runs/live.db",
+  "poll_seconds": 5,
+  "queue_size": 2000,
+  "collectors": {
+    "process": {
+      "enabled": true
+    },
+    "network": {
+      "enabled": true
+    },
+    "files": {
+      "enabled": false,
+      "paths": [
+        "/tmp/edr-lab"
+      ]
+    },
+    "docker": {
+      "enabled": false,
+      "container": "juice-shop"
+    },
+    "system_auth": {
+      "enabled": false,
+      "unit": "ssh.service"
+    },
+    "http_auth": {
+      "enabled": true,
+      "interface": "ens33",
+      "target_ip": "192.168.100.100",
+      "port": 3000
+    }
+  },
+  "rules": {
+    "BA-001": {
+      "enabled": true,
+      "threshold": 5,
+      "window_seconds": 10
+    }
+  },
+  "response": {
+    "mode": "notify_only"
+  }
+}
