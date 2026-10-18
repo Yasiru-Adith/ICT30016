@@ -1,6 +1,8 @@
 from edr.rules.broken_auth import BrokenAuth
+from edr.rules.idor import IDOR
 
-RULES = {'BA-001': BrokenAuth}
+RULES = {'BA-001': BrokenAuth,
+         'IDOR-001':IDOR}
 
 
 def load_rules(config):
