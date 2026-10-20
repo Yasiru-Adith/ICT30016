@@ -1,4 +1,4 @@
-# Team EDR
+# Team EDR8
 
 A modular Python endpoint monitoring and detection tool for authorised Juice Shop lab environments. One agent runs on each monitored Ubuntu VM, combining telemetry collection, detection rules, alert storage and a local dashboard.
 
