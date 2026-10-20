@@ -6,7 +6,7 @@ This README covers the EDR architecture, installation and operation, followed by
 
 ## Contents
 
-1. [Common EDR implementation](#1-common-edr-implementation)
+1. [EDR Tool implementation](#1-common-edr-implementation)
 2. [Installation and configuration](#2-installation-and-configuration)
 3. [Running the EDR](#3-running-the-edr)
 4. [Detection module interface](#4-detection-module-interface)
@@ -15,7 +15,7 @@ This README covers the EDR architecture, installation and operation, followed by
 7. [Evaluation and evidence](#7-evaluation-and-evidence)
 8. [Limitations](#8-limitations)
 
-## 1. Common EDR implementation
+## 1. EDR Tool implementation
 
 ### Architecture
 
