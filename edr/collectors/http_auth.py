@@ -2,6 +2,7 @@
 from collections import defaultdict, deque
 from urllib.parse import urlsplit
 from uuid import uuid4
+import re
 import socket
 import subprocess
 import threading
@@ -11,6 +12,8 @@ from edr.core import utc as stamp
 
 def identifier():
     return str(uuid4())
+
+BASKET_PATH = re.compile(r'^/rest/basket/(\d+)(?:\?.*)?$')
 
 
 class AuthenticationCollector:
@@ -32,6 +35,30 @@ class AuthenticationCollector:
             observed = float(timestamp)
         except (ValueError, TypeError):
             return None
+
+        # IDOR-001: detect access to a Juice Shop basket.
+        if method == "GET" and dst == self.target and dport == str(self.port):
+            match = BASKET_PATH.match(uri)
+            if match:
+                return {
+                    "schema_version": 1,
+                    "source": "http_auth",
+                    "event_id": identifier(),
+                    "event_type": "basket_access",
+                    "event_timestamp": stamp(observed),
+                    "collector_timestamp": stamp(),
+                    "host": self.host,
+                    "data": {
+                        "service": "juice_shop",
+                        "source_ip": src,
+                        "target_ip": self.target,
+                        "target_port": self.port,
+                        "basket_id": int(match.group(1)),
+                        "request_path": uri.split("?")[0],
+                        "tcp_stream": stream,
+                        "frame_number": frame,
+                    },
+                }
 
         # Remove requests that have been waiting too long for a response.
         for key in list(self.pending):

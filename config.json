@@ -39,6 +39,11 @@
     "SQLI-001": {
       "enabled": true,
       "severity": 4
+    },
+    "IDOR-001": {
+      "enabled": true,
+      "distinct_threshold": 3,
+      "window_seconds": 10
     }
   },
   "response": {
