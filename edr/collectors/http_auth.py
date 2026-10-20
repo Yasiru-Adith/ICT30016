@@ -1,8 +1,12 @@
 from collections import defaultdict, deque
 from edr.core import utc as stamp
 from uuid import uuid4
+import  re #IDOR 
+
 def identifier():
     return str(uuid4())
+
+BASKET_PATH = re.compile(r'^/rest/basket/(\d+)(?:\?.*)?$') #IDOR
 
 class AuthenticationCollector:
     def __init__(self, host, target, port):
@@ -18,6 +22,24 @@ class AuthenticationCollector:
             observed = float(timestamp)
         except ValueError:
             return None
+        
+        # --- IDOR-001: basket_access ---
+        if method == 'GET' and dst == self.target and dport == str(self.port):
+            match = BASKET_PATH.match(uri)
+            if match:
+                return {
+                    'schema_version': 1, 'source': 'http_auth', 'event_id': identifier(),
+                    'event_type': 'basket_access',
+                    'event_timestamp': stamp(observed), 'collector_timestamp': stamp(),
+                    'host': self.host, 'data': {
+                        'service': 'juice_shop', 'source_ip': src,
+                        'target_ip': self.target, 'target_port': self.port,
+                        'basket_id': int(match.group(1)),
+                        'request_path': uri.split('?')[0], 'tcp_stream': stream,
+                        'frame_number': frame,
+                    }
+                }
+        # --- end IDOR-001 ---
         # Expire unpaired requests to bound memory in this lab prototype.
         for key in list(self.pending):
             queue = self.pending[key]

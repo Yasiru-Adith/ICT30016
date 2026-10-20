@@ -35,8 +35,14 @@
       "enabled": true,
       "threshold": 5,
       "window_seconds": 10
+    },
+      "IDOR-001": {
+      "enabled": true,
+      "distinct_threshold": 3,
+      "window_seconds": 10
     }
   },
+  
   "response": {
     "mode": "notify_only"
   }
