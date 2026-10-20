@@ -1,27 +1,78 @@
-# Team EDR — first shared build
+# Team EDR
 
-Python agent on Ubuntu → collectors → normalized events → registered rules → alerts → response.
-The local browser dashboard reads the same SQLite database. Kali only generates authorised test traffic. This is a new codebase; preserve your old working scripts and evidence.
+A modular Python endpoint monitoring and detection tool for authorised Juice Shop lab environments. One agent runs on each monitored Ubuntu VM, combining telemetry collection, detection rules, alert storage and a local dashboard.
 
-## What is implemented
+This README covers the EDR architecture, installation and operation, followed by detection scenarios and verification procedures.
 
-- Configurable process and network polling, filesystem notifications, live HTTP authentication collection, SSH failure parsing through journalctl, Docker log-stream integration.
-- One shared schema, bounded queue, collector error records, SQLite event/alert/response persistence.
-- Independently registered BA-001 rule: five failures within ten seconds, grouped by host/source/target/port; numeric severity 3/5 (Medium).
-- Notification response with recorded outcome and recommendation. No containment actions yet.
-- Local dashboard: counts, recent alerts, evidence/timing, event records and collector status history; refreshes every three seconds.
-- Agent CPU/memory sampling and labelled trial evaluation: TP, FN, FP, TN, detection rate, false-positive rate and MTTD.
+## Contents
 
-Important: Docker collection currently records that log lines were observed, not their content or attack indicators. Application log parsing needs actual team samples and agreed redaction. SSH parsing recognizes common failed-password/publickey messages, using collector-observation time; it does not feed the Juice Shop BA rule. These integrations are not complete attack detectors.
+1. [Common EDR implementation](#1-common-edr-implementation)
+2. [Installation and configuration](#2-installation-and-configuration)
+3. [Running the EDR](#3-running-the-edr)
+4. [Detection module interface](#4-detection-module-interface)
+5. [BA-001: Repeated failed logins](#5-ba-001-repeated-failed-logins)
+6. [Detection scenario template](#6-detection-scenario-template)
+7. [Evaluation and evidence](#7-evaluation-and-evidence)
+8. [Limitations](#8-limitations)
 
-## 1. Transfer into VMware
+## 1. Common EDR implementation
 
-Download team-edr.zip on Windows and drag it into Ubuntu Home. If unavailable, use VMware Shared Folders as discussed. Extract into your home directory:
+### Architecture
+
+Collectors gather activity and produce events in a common format. The agent receives those events through a bounded queue, saves them in SQLite and passes them to registered detection rules. When a rule returns an alert, the agent saves it and invokes the response handler. A separate dashboard reads the database.
+
+### Shared components
+
+| Component | Purpose |
+|---|---|
+| `agent.py` | Loads configuration and coordinates collection, processing, detection and response |
+| `edr/collectors/` | Collects activity and converts it into common events |
+| `edr/rules/` | Contains separate detection modules |
+| `edr/rules/registry.py` | Registers rules and loads enabled rules |
+| `config.json` | Sets the database, collectors, lab settings and rule options |
+| SQLite storage | Saves events, alerts, responses, collector status and performance records |
+| `edr/response.py` | Records notification outcomes and recommendations |
+| `dashboard.py` | Displays saved events, alerts, evidence and collector status |
+| `evaluate.py` | Evaluates labelled trials |
+| `SCHEMA.md` | Defines shared event and alert fields |
+| `tests/` | Contains automated checks |
+
+### Collectors
+
+| Collector | What it gathers | Notes |
+|---|---|---|
+| Process | Newly observed and disappeared processes using `psutil` | Polling can miss short-lived processes |
+| Network | Newly observed connections using `psutil` | Does not inspect packet contents |
+| HTTP authentication | Juice Shop login requests and responses using TShark | Produces failed-login events for BA-001 |
+| Filesystem | File creation, modification, deletion and movement using `watchdog` | Does not provide reliable file-read auditing |
+| Docker logs | Observes container log lines | Records occurrence and length; does not extract attack indicators |
+| System authentication | Common SSH failed-password/public-key messages from the configured journal unit | Does not feed the Juice Shop BA rule |
+
+Enable only the collectors required for the configured detection scenarios. Collector requirements are documented with each scenario.
+
+### Alerts, response and dashboard
+
+The current response mode is `notify_only`: alerts and notification outcomes are recorded. Automatic IP blocking and file quarantine are not implemented in this release.
+
+The dashboard shows counts, recent alerts, event evidence, timing and collector status history. It refreshes every three seconds and is read-only on localhost. Status history is not a continuous heartbeat.
+
+## 2. Installation and configuration
+
+### Lab requirements
+
+- Ubuntu VM running Juice Shop and the EDR.
+- Kali VM for generating test activity.
+- Network connectivity between the VMs.
+- Python 3, virtual-environment support and TShark on Ubuntu.
+- Internet access or locally available packages for installation.
+
+Example Juice Shop address: `http://192.168.100.100:3000`. Replace it with the actual lab address throughout these instructions.
+
+### Install the project
+
+Copy or clone the project onto Ubuntu, open a terminal in the project folder and run:
 
 ```bash
-cd ~
-unzip team-edr.zip
-cd team-edr
 sudo apt update
 sudo apt install python3-venv tshark
 python3 -m venv .venv
@@ -29,20 +80,11 @@ python3 -m venv .venv
 .venv/bin/python -m unittest discover -s tests -v
 ```
 
-Dependencies require internet or locally available packages. If the lab is host-only, install dependencies before returning to the controlled lab network. Python code is not tied to VMware vs VirtualBox; Linux services and privileges still matter.
+Install dependencies before switching to a host-only network if necessary. Preserve existing configuration and test evidence when upgrading.
 
-## 2. Preview the interface without a live attack
+### Configure the agent
 
-```bash
-.venv/bin/python agent.py --demo
-.venv/bin/python dashboard.py --database runs/demo.db
-```
-
-Open http://127.0.0.1:8080 INSIDE the Ubuntu VM. The demo creates five synthetic events and one synthetic alert per execution. It uses a separate demo database and the interface labels synthetic alerts. This is an interface/logic check, not live detection evidence. Ctrl+C stops the dashboard. The dashboard is read-only and bound to localhost; no login or containment controls are included.
-
-## 3. Configure live collection
-
-Find the interface and container:
+Find the interface and, if required, the container name:
 
 ```bash
 ip -br address
@@ -51,36 +93,119 @@ docker ps --format '{{.Names}}'
 nano config.json
 ```
 
-In config.json:
-- Set database to runs/ba-test-1.db (fresh filename per test avoids mixed counts and trials).
-- Enable http_auth, set actual interface, Juice Shop IP and exposed port.
-- Keep process/network enabled for broader host visibility.
-- For file collection, first create /tmp/edr-lab, enable files and set specific watch directories. Do not watch the database/output directory; doing so creates feedback events.
-- Enable docker only with the actual container name. Docker access is privileged.
-- Enable system_auth if SSH monitoring is needed; confirm the actual journal unit (Ubuntu often ssh.service). This does not read /var/log/auth.log.
-- Leave response.mode as notify_only. Other modes are rejected.
+Update the existing configuration:
 
-All members can use the same code with different config.json values. Defaults are examples, not discovery of your VM.
+- Set `database` to the database for the current test, such as `runs/ba-normal-1.db`.
+- Enable `http_auth` and set the actual capture interface, Juice Shop IP and port.
+- Keep process/network collection enabled if broader host visibility is required.
+- Enable the required rules and set their thresholds.
+- Keep `response.mode` as `notify_only`; other modes are rejected by this release.
+- Enable Docker collection only with the correct container name and access permissions.
+- For filesystem collection, create the selected watch directory first. Do not watch the database or output directory, which can create feedback events.
+- For SSH collection, confirm the actual journal unit, commonly `ssh.service` on Ubuntu.
 
-## 4. Start live agent and dashboard
+Each monitored VM uses the same source code with configuration values appropriate to that VM.
 
-Terminal 1 on Ubuntu (sudo enables lab capture/system visibility):
+## 3. Running the EDR
+
+### Optional synthetic preview
+
+```bash
+.venv/bin/python agent.py --demo
+.venv/bin/python dashboard.py --database runs/demo.db
+```
+
+Open `http://127.0.0.1:8080` inside Ubuntu. Each demo execution produces five synthetic events and one synthetic alert. This checks the interface and detection path; it is not evidence of live collection.
+
+Stop the preview dashboard with Ctrl+C before starting the live dashboard on the same port.
+
+### Live monitoring
+
+Start Juice Shop before testing.
+
+In Ubuntu terminal 1, from the project folder:
 
 ```bash
 sudo .venv/bin/python agent.py --config config.json
 ```
 
-Terminal 2 on Ubuntu:
+In Ubuntu terminal 2:
 
 ```bash
-sudo .venv/bin/python dashboard.py --database runs/ba-test-1.db
+sudo .venv/bin/python dashboard.py --database runs/ba-normal-1.db
 ```
 
-Open http://127.0.0.1:8080 inside Ubuntu. Check collector status history for failures. A failed collector leaves the remaining collectors running, so counts alone do not prove all monitoring is healthy. Status history is not a heartbeat.
+Use the same database path in `config.json` and the dashboard command. Open `http://127.0.0.1:8080` inside Ubuntu.
 
-## 5. Live BA tests on Kali
+Check collector status for failures before running an attack. Other collectors may continue producing events even when the required collector has failed. Stop the agent and dashboard with Ctrl+C when finished.
 
-Keep Juice Shop running. Start the agent BEFORE requests. For a below-threshold test:
+## 4. Detection module interface
+
+Detection modules use the common event schema and return alerts through the shared agent pipeline. A module consists of:
+
+1. A defined detection scenario and its required telemetry.
+2. A collector or parser that supplies the required event fields.
+3. A rule module in `edr/rules/`.
+4. An entry in `edr/rules/registry.py` and settings in `config.json`.
+5. Automated checks and repeatable attack and control tests.
+6. Documentation of configuration, expected results and limitations.
+
+Example rule interface:
+
+```python
+class ExampleRule:
+    rule_id = 'RULE-002'
+
+    def __init__(self, config):
+        pass
+
+    def process(self, event):
+        # Return [] when there is no match.
+        # Return a list of alert dictionaries when detection conditions match.
+        return []
+```
+
+Alerts must include:
+
+- `alert_id`
+- `rule_id`
+- `attack`
+- `severity` (1–5)
+- `severity_label`
+- `host`
+- `detection_timestamp`
+- `evidence_event_ids`
+- `recommended_action`
+
+Include timing fields where meaningful. Follow `SCHEMA.md` for shared formats.
+
+All detection modules reuse the agent, storage, response handler and dashboard. Verify modules together to check that existing detections continue to operate correctly.
+
+## 5. BA-001: Repeated failed logins
+
+**Contributor:** Yasiru Weerasinghe  
+**Category:** Broken Authentication  
+**Scope:** Repeated failed Juice Shop logins; this does not cover every authentication attack.
+
+### Implementation
+
+The HTTP authentication collector uses TShark to match login requests with responses. A `POST /rest/user/login` request returning HTTP `401` produces an `authentication_failure` event.
+
+The rule in `edr/rules/broken_auth.py` alerts on **five failures within ten seconds**, grouped by monitored host, source IP, target IP and target port.
+
+The alert includes matching event IDs and timing evidence. The shared response handler records a notification; it does not block the source.
+
+### Required configuration
+
+- HTTP authentication collection enabled with the correct interface, target IP and port.
+- `BA-001` enabled with a five-failure threshold and ten-second window.
+- A fresh database for each independent test below.
+
+### Test A: Below threshold
+
+1. Set the database to `runs/ba-normal-1.db` in `config.json`.
+2. Start the live agent and dashboard using Section 3.
+3. On Kali, run:
 
 ```bash
 for attempt in 1 2; do
@@ -92,57 +217,141 @@ for attempt in 1 2; do
 done
 ```
 
-Expected: two 401 responses, two authentication_failure events, zero BA alerts. Total event count will be higher because other collectors generate events.
+**Expected result:**
 
-Stop the agent with Ctrl+C. Change config database to runs/ba-test-2.db, restart agent and point dashboard to that database. Run the same Kali command with `for attempt in 1 2 3 4 5; do`. Expected: five 401s within ten seconds → one BA-001 alert → one response. Examine evidence_event_ids and timestamps in the alert. HTTP delays can push the test outside the window; use recorded times.
+- Two HTTP `401` responses.
+- Two `authentication_failure` events.
+- No BA-001 alert.
 
-All logged times use UTC; your Sydney local time differs. For real evidence use screenshots of live mode, not the synthetic demo.
+Other collectors may increase the total event count. This is a below-threshold control, not a complete normal-traffic evaluation.
 
-## 6. Record evaluation trials
+### Test B: Repeated failed-login attack
 
-Use one separately controlled attack or normal trial per time window, and preferably a fresh agent/database per test. Capture actual trial start/end UTC times (not invented values). The end must allow sufficient observation time for delayed detection. Example shape, replacing the placeholder timestamps:
+1. Stop the agent and dashboard.
+2. Change the configuration database to `runs/ba-attack-1.db`, using a filename that does not already contain test data.
+3. Restart both programs, pointing the dashboard to `runs/ba-attack-1.db`.
+4. On Kali, run:
 
 ```bash
-sudo .venv/bin/python evaluate.py --database runs/ba-test-2.db \
+for attempt in 1 2 3 4 5; do
+  curl -s -o /dev/null -w 'HTTP %{http_code}\n' \
+    -X POST http://192.168.100.100:3000/rest/user/login \
+    -H 'Content-Type: application/json' \
+    --data '{"email":"edr-test@example.invalid","password":"wrong-password"}'
+  sleep 1
+done
+```
+
+**Expected result:**
+
+- Five HTTP `401` responses within ten seconds.
+- One BA-001 alert.
+- One recorded notification response.
+
+Check the captured timestamps: slow requests can push the test outside the detection window.
+
+### Evidence to record
+
+- Kali output showing the HTTP responses.
+- Dashboard alert with source, target, rule ID and timestamps.
+- Matching authentication events and notification outcome.
+- Below-threshold test showing recorded failures without a BA-001 alert.
+
+Keep results tied to the code version and configuration used. Historical VM results are separate evidence and are not automatically reproduced by downloading the repository.
+
+## 6. Detection scenario template
+
+The following template defines the documentation format for an additional detection scenario. It describes no enabled capability until its placeholders are completed and its implementation is verified.
+
+### [Rule ID]: [Attack name]
+
+**Contributor:** [Name]  
+**Category:** [Attack category]  
+**Implementation status:** [State verified support and any restrictions]
+
+#### Implementation
+
+- **Files added or changed:** [Paths]
+- **Telemetry:** [Collector, event type and required fields]
+- **Detection condition:** [Exact conditions, grouping, threshold and window]
+- **Alert and response:** [What is generated and what action is actually taken]
+- **Detection limits:** [What the evidence can and cannot establish]
+
+#### Setup and configuration
+
+[List dependencies, test accounts, required collector/rule settings and any additional setup.]
+
+#### Attack test
+
+1. [Start the EDR with the required configuration.]
+2. [State which VM runs the attack.]
+3. [Provide exact commands or script filename and arguments.]
+4. [State the expected events, alert and response.]
+
+#### Normal or below-threshold test
+
+[Provide repeatable steps and expected results using an independent test state.]
+
+#### Evidence and results
+
+[Link reviewed screenshots, sample events and measured results. Include code version and configuration. Do not include passwords or session tokens.]
+
+For basket enumeration, distinguish a request-based alert from confirmed unauthorised access. Confirmation requires successful access and evidence that the basket belongs to a different account.
+
+## 7. Evaluation and evidence
+
+Record controlled attack and normal trials with actual UTC start/end times. Allow observation time for delayed alerts.
+
+Example:
+
+```bash
+sudo .venv/bin/python evaluate.py --database runs/ba-attack-1.db \
   --trial-id ba-attack-1 --scenario broken-auth --rule BA-001 --label attack \
   --start 'ACTUAL_START_UTC' --end 'ACTUAL_END_UTC'
 ```
 
-Use --label normal for normal activity tests. Duplicate IDs and overlapping windows for the same rule are rejected. Evaluation counts a matching non-synthetic alert within the window; avoid unrelated simultaneous activity, and manually check attribution. It does not automatically launch attacks or establish causality.
+Replace the timestamps before running. Use `--label normal` for normal/control trials. Duplicate IDs and overlapping windows for the same rule are rejected.
 
-For multiple repetitions, keep trials in one experiment database with nonoverlapping windows (and wait >10 seconds between BA trials to re-arm). Reports group by scenario/rule in that database. If using separate databases per run, consolidate reviewed trial results externally; cross-database aggregation is not implemented.
+### Detection metrics
 
-Detection rate = TP/(TP+FN); false-positive rate = FP/(FP+TN). MTTD here averages detected attack trials using detection timestamp minus the supplied trial start. Missed attacks remain FN and are not assigned a fabricated time. Five trials per scenario yield 20% increments: meeting >=90% requires 5/5; ten trials can represent 90%.
+| Metric | Meaning |
+|---|---|
+| Detection rate | TP / (TP + FN) |
+| False-positive rate | FP / (FP + TN) |
+| Evaluation MTTD | Average detection timestamp minus supplied trial start for detected attack trials |
+| BA alert timing | Time from the first observed failed-login response and from the threshold-satisfying response |
 
-BA alerts also include time from the first observed failure and from the threshold-satisfying failure. They use capture response timestamps, not true attacker onset. Threshold latency includes collection/delivery, queuing and processing. Clock changes distort wall-clock differences. Demo timings are synthetic. Process/network polling at five seconds can miss short-lived activity and add delay; collect real measurements before changing intervals.
+BA alert timings differ from trial-start MTTD.
 
-CPU measurements are in the performance table: agent_cpu_percent (may exceed 100 on multiple cores), agent_rss_bytes, child_rss_bytes, system_cpu_percent, queue_depth and dropped_events. Agent CPU does NOT include TShark CPU; system CPU includes Juice Shop and other activity. Compare idle baseline and attack runs and use OS tools for full process-tree CPU. The concept does not provide a numeric CPU budget; agree one with the tutor before asserting compliance.
+The evaluator does not launch attacks or prove alert attribution. Review evidence manually and avoid unrelated simultaneous activity. Missed attacks count as false negatives and receive no invented detection time.
 
-## 7. Adding a teammate's rule
+Use fresh agent/database instances for independent tests.
 
-Create edr/rules/their_rule.py with this interface:
+For repeated trials in one experiment database, use nonoverlapping windows and allow more than ten seconds between BA trials to re-arm.
 
-```python
-class TheirRule:
-    rule_id = 'TEAM-002'
-    def __init__(self, config):
-        pass
-    def process(self, event):
-        # Filter event_type and check verified attack behaviour.
-        # Return [] when no match; otherwise return a list of alert dictionaries.
-        return []
-```
+Cross-database aggregation is not implemented. Consolidate reviewed results separately if using separate databases.
 
-Import/register the class in edr/rules/registry.py, then add its enabled settings to config.json. Alerts must include alert_id, rule_id, attack, severity (1–5), severity_label, host, detection_timestamp, evidence_event_ids and recommended_action. Include timing fields where meaningful. Response and dashboard then reuse the existing handler. Add a collector only if existing events cannot provide the required evidence. Never label placeholder rules as detections.
+### Performance monitoring
 
-See SCHEMA.md for shared fields. A team rule needs real attack evidence plus normal tests. IDOR requires authorization context; forged JWT requires verified token context; network connections alone are insufficient.
+Performance records include:
 
-## Current limitations and next work
+- Agent CPU usage.
+- Agent and child-process memory usage.
+- System CPU usage.
+- Queue depth.
+- Dropped events.
 
-This first build supports BA only. Docker/application parsing, additional selected rules and controlled containment require further work. Watchdog records changes, not a reliable audit of file reads or attribution to a process. Process/network events are sampled observations, not complete execution/connection history. HTTP collector covers IPv4 plaintext HTTP/1.1 with simple per-stream request/response pairing; missing packets, pipelining or multiple messages per packet may break correlation. HTTPS needs application logs or appropriate endpoint instrumentation. Authentication payloads and raw Docker logs are not persisted.
+Agent CPU excludes TShark CPU, while system CPU includes other workloads. Compare idle and attack measurements before making performance claims.
 
-Database records accumulate until the test is stopped; no retention/rotation yet. Queue overflow counts dropped events; shutdown records unprocessed events. Enabled collectors must be checked for errors. Agent restarts reset BA state. Duplicate alerts are suppressed while a group's active window remains above threshold.
+## 8. Limitations
 
-A later response module can support allowlisted, reversible lab containment with outcome and rollback records; this release only notifies. Running everything as root is a lab simplification, not the final privilege model.
-
-The dashboard remains basic: status and evidence, no editing or action buttons. Extend it after rule integration instead of building a large UI early.
+- The documented release provides BA-001 detection. Coverage is limited to implemented and verified scenarios; the scenario template does not represent an additional detection capability.
+- Process and network polling can miss short-lived activity.
+- Docker collection needs attack-specific parsing; SSH collection does not feed BA-001.
+- Filesystem notifications do not provide reliable file-read auditing, process attribution or file-integrity hashing by themselves.
+- The HTTP collector covers IPv4 plaintext HTTP/1.1 with simple per-stream pairing. Missing packets, pipelining or multiple messages per packet can break correlation. HTTPS requires another suitable telemetry source.
+- Authentication payloads and raw Docker logs are not persisted by the supplied collectors.
+- Database records have no retention/rotation yet. Queue overflow can drop events; review dropped and unprocessed event records.
+- Restarting the agent resets in-memory BA state. Duplicate BA alerts are suppressed while a group's active window remains above threshold.
+- All logged times are UTC. Clock changes can distort elapsed-time measurements.
+- Containment and rollback are not supported in this release. The documented live setup uses root privileges for lab capture and system visibility.
