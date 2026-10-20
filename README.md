@@ -13,7 +13,6 @@ This README covers the EDR architecture, installation and operation, followed by
 5. [BA-001: Repeated failed logins](#5-ba-001-repeated-failed-logins)
 6. [Detection scenario template](#6-detection-scenario-template)
 7. [Evaluation and evidence](#7-evaluation-and-evidence)
-8. [Limitations](#8-limitations)
 
 ## 1. EDR Tool implementation
 
@@ -343,15 +342,4 @@ Performance records include:
 
 Agent CPU excludes TShark CPU, while system CPU includes other workloads. Compare idle and attack measurements before making performance claims.
 
-## 8. Limitations
 
-- The documented release provides BA-001 detection. Coverage is limited to implemented and verified scenarios; the scenario template does not represent an additional detection capability.
-- Process and network polling can miss short-lived activity.
-- Docker collection needs attack-specific parsing; SSH collection does not feed BA-001.
-- Filesystem notifications do not provide reliable file-read auditing, process attribution or file-integrity hashing by themselves.
-- The HTTP collector covers IPv4 plaintext HTTP/1.1 with simple per-stream pairing. Missing packets, pipelining or multiple messages per packet can break correlation. HTTPS requires another suitable telemetry source.
-- Authentication payloads and raw Docker logs are not persisted by the supplied collectors.
-- Database records have no retention/rotation yet. Queue overflow can drop events; review dropped and unprocessed event records.
-- Restarting the agent resets in-memory BA state. Duplicate BA alerts are suppressed while a group's active window remains above threshold.
-- All logged times are UTC. Clock changes can distort elapsed-time measurements.
-- Containment and rollback are not supported in this release. The documented live setup uses root privileges for lab capture and system visibility.
