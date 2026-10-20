@@ -180,31 +180,89 @@ Include timing fields where meaningful. Follow `SCHEMA.md` for shared formats.
 
 All detection modules reuse the agent, storage, response handler and dashboard. Verify modules together to check that existing detections continue to operate correctly.
 
-## 5. BA-001: Repeated failed logins
+## 5 BA-001: Repeated Failed Logins
 
 **Contributor:** Yasiru Weerasinghe  
 **Category:** Broken Authentication  
-**Scope:** Repeated failed Juice Shop logins; this does not cover every authentication attack.
+**Scope:** Detects repeated failed login attempts against Juice Shop.
 
 ### Implementation
 
-The HTTP authentication collector uses TShark to match login requests with responses. A `POST /rest/user/login` request returning HTTP `401` produces an `authentication_failure` event.
+The HTTP authentication collector uses TShark to match login requests with their responses. A `POST /rest/user/login` request returning HTTP `401` produces an `authentication_failure` event.
 
-The rule in `edr/rules/broken_auth.py` alerts on **five failures within ten seconds**, grouped by monitored host, source IP, target IP and target port.
+The detection rule in `edr/rules/broken_auth.py` generates a **Possible Brute-Force Authentication** alert when it observes **five failed logins within ten seconds**, grouped by monitored host, source IP, target IP and target port.
 
-The alert includes matching event IDs and timing evidence. The shared response handler records a notification; it does not block the source.
+The alert includes the supporting event IDs, source and target details, and detection timing. The response handler records a notification. It does not automatically block the source.
 
-### Required configuration
+Repeated failures indicate possible brute-force activity; they do not prove malicious intent or successful account access.
 
-- HTTP authentication collection enabled with the correct interface, target IP and port.
+### Requirements and Configuration
+
+- Ubuntu VM running Juice Shop and the EDR.
+- Kali VM with network access to Juice Shop.
+- HTTP authentication collector enabled with the correct capture interface, target IP and port.
 - `BA-001` enabled with a five-failure threshold and ten-second window.
-- A fresh database for each independent test below.
+- Response mode set to `notify_only`.
 
-### Test A: Below threshold
+The commands below assume:
 
-1. Set the database to `runs/ba-normal-1.db` in `config.json`.
-2. Start the live agent and dashboard using Section 3.
-3. On Kali, run:
+| Setting | Example value |
+|---|---|
+| Ubuntu project folder | `~/team-edr` |
+| Juice Shop IP | `192.168.100.100` |
+| Juice Shop port | `3000` |
+| Kali IP | `192.168.100.200` |
+
+Replace these values where they differ from the deployed lab environment. Run the tests only against an authorised lab instance.
+
+### Test A: Below-Threshold Activity
+
+This test checks that two failed logins are recorded without triggering BA-001.
+
+#### 1. Configure an independent test
+
+Stop any running agent and dashboard with **Ctrl+C**.
+
+On Ubuntu:
+
+```bash
+cd ~/team-edr
+nano config.json
+```
+
+Set the existing `database` field to:
+
+```json
+"database": "runs/ba-normal-1.db",
+```
+
+Use a filename that does not already contain test data. Preserve the remaining configuration.
+
+#### 2. Start the agent
+
+In Ubuntu terminal 1:
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python agent.py --config config.json
+```
+
+Leave the terminal running and check that the HTTP authentication collector starts without an error.
+
+#### 3. Start the dashboard
+
+In Ubuntu terminal 2:
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python dashboard.py --database runs/ba-normal-1.db
+```
+
+Open `http://127.0.0.1:8080` in the Ubuntu browser.
+
+#### 4. Generate two failed logins
+
+On Kali:
 
 ```bash
 for attempt in 1 2; do
@@ -216,20 +274,58 @@ for attempt in 1 2; do
 done
 ```
 
-**Expected result:**
+#### Expected Result
 
 - Two HTTP `401` responses.
-- Two `authentication_failure` events.
-- No BA-001 alert.
+- Two matching `authentication_failure` events.
+- No BA-001 alert or associated notification response.
 
-Other collectors may increase the total event count. This is a below-threshold control, not a complete normal-traffic evaluation.
+Other collectors may increase the dashboard's total event count. This is a below-threshold control, not a complete evaluation of normal traffic.
 
-### Test B: Repeated failed-login attack
+### Test B: Repeated Failed-Login Attack
 
-1. Stop the agent and dashboard.
-2. Change the configuration database to `runs/ba-attack-1.db`, using a filename that does not already contain test data.
-3. Restart both programs, pointing the dashboard to `runs/ba-attack-1.db`.
-4. On Kali, run:
+This test checks that five failed logins within ten seconds trigger BA-001.
+
+#### 1. Start an independent test
+
+Stop the agent and dashboard with **Ctrl+C**.
+
+On Ubuntu:
+
+```bash
+cd ~/team-edr
+nano config.json
+```
+
+Change the existing `database` field to:
+
+```json
+"database": "runs/ba-attack-1.db",
+```
+
+Use a filename that does not already contain test data.
+
+#### 2. Restart the agent and dashboard
+
+In Ubuntu terminal 1:
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python agent.py --config config.json
+```
+
+In Ubuntu terminal 2:
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python dashboard.py --database runs/ba-attack-1.db
+```
+
+Refresh `http://127.0.0.1:8080` and confirm that the required collector has started.
+
+#### 3. Generate five failed logins
+
+On Kali:
 
 ```bash
 for attempt in 1 2 3 4 5; do
@@ -241,22 +337,51 @@ for attempt in 1 2 3 4 5; do
 done
 ```
 
-**Expected result:**
+#### Expected Result
 
-- Five HTTP `401` responses within ten seconds.
-- One BA-001 alert.
+- Five HTTP `401` responses.
+- Five matching `authentication_failure` events within ten seconds.
+- One BA-001 alert linked to the five supporting events.
 - One recorded notification response.
 
-Check the captured timestamps: slow requests can push the test outside the detection window.
+Check the captured event timestamps. Slow requests can place the failures outside the detection window.
 
-### Evidence to record
+### Alert Evidence and Timing
 
-- Kali output showing the HTTP responses.
-- Dashboard alert with source, target, rule ID and timestamps.
-- Matching authentication events and notification outcome.
-- Below-threshold test showing recorded failures without a BA-001 alert.
+Expand **Evidence and timing** in the dashboard to inspect:
 
-Keep results tied to the code version and configuration used. Historical VM results are separate evidence and are not automatically reproduced by downloading the repository.
+| Field | Meaning |
+|---|---|
+| `source_ip` | Address that sent the login attempts |
+| `target_ip` and `target_port` | Monitored Juice Shop service |
+| `failed_attempts` | Number of failures supporting the alert |
+| `window_seconds` | Configured detection window |
+| `evidence_event_ids` | Identifiers linking the alert to its supporting events |
+| `attack_to_detection_seconds` | Time from the first observed failed-login response to alert generation |
+| `threshold_to_detection_seconds` | Time from the threshold-satisfying failure to alert generation |
+| `synthetic` | `false` for live monitoring evidence |
+
+In one observed live trial, five failures occurred within approximately **4.13 seconds**. The alert was generated approximately **4.57 seconds after the first observed failure**, or **0.44 seconds after the fifth failure**. These are individual trial measurements, not guaranteed performance.
+
+### Evidence to Retain
+
+For each test, retain:
+
+- Kali terminal output showing HTTP response codes.
+- Matching authentication events.
+- The dashboard alert and notification response for the attack test.
+- Evidence that the below-threshold test recorded failures without a BA-001 alert.
+- The code version, configuration, database filename and test timestamps.
+
+Exclude passwords, session tokens and other sensitive values from shared evidence.
+
+### Repeating a Demonstration
+
+An existing database such as `runs/live.db` may be reused for demonstrations. The agent configuration and dashboard command must reference the same database.
+
+Previous events and alerts remain visible. Allow more than ten seconds without failed-login activity between demonstrations and identify new alerts by their timestamps.
+
+For independent evaluation trials, restart the agent and use a fresh database filename.
 
 ## 6. Detection scenario template
 
