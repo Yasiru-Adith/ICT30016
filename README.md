@@ -296,6 +296,62 @@ The following template defines the documentation format for an additional detect
 [Link reviewed screenshots, sample events and measured results. Include code version and configuration. Do not include passwords or session tokens.]
 
 For basket enumeration, distinguish a request-based alert from confirmed unauthorised access. Confirmation requires successful access and evidence that the basket belongs to a different account.
+### 6.1 SQLI-001: SQL Injection – Data Exfiltration
+
+**Contributor:** Sohana Tasnim Faiza  
+**Category:** SQL Injection  
+**Implementation status:** Implemented; automated tests passed and a High-severity alert was observed on the dashboard.
+
+#### Implementation
+
+- **Files:** `edr/rules/sqli_exfiltration.py`, `edr/collectors/http_auth.py`, `edr/rules/registry.py`, `config.json`
+- **Telemetry:** HTTP request events collected using TShark from the configured Juice Shop target.
+- **Target endpoint:** `/rest/products/search`
+- **Detection condition:** Detects suspicious SQL injection patterns, including `UNION SELECT`, in relevant product-search requests.
+- **Alert:** `SQLI-001`, High severity (4).
+- **Response:** The configured `notify_only` mode records alerts and recommendations without automatically blocking the source.
+
+#### Setup and configuration
+
+1. Start OWASP Juice Shop on the Ubuntu lab VM.
+2. Configure the HTTP collector with the correct interface, target IP and port in `config.json`.
+3. Enable `SQLI-001`.
+4. Start the EDR agent and dashboard using Section 3 of this README.
+
+#### Attack test
+
+From the authorised Kali lab VM, send a controlled SQL injection test request to the Juice Shop product-search endpoint:
+
+```bash
+curl -G 'http://192.168.241.128:3000/rest/products/search' \
+  --data-urlencode "q=qwert')) UNION SELECT id, email, password, '4', '5', '6', '7', '8', '9' FROM Users--"
+```
+
+**Expected result:** The HTTP collector captures the request and the rule generates a `SQLI-001` alert if the request matches the detection conditions.
+
+#### Normal/control test
+
+Send a normal product search request:
+
+```bash
+curl -G 'http://192.168.241.128:3000/rest/products/search' \
+  --data-urlencode "q=orange"
+```
+
+**Expected result:** No `SQLI-001` alert should be generated for the normal search.
+
+#### Evidence and results
+
+- Automated test command: `.venv/bin/python -m unittest discover -s tests -v`
+- **Automated result:** 10 tests passed (`OK`).
+- **Dashboard result:** A `SQLI-001` alert with severity `4 / High` was observed.
+- Evidence includes the terminal test output and dashboard screenshot.
+
+#### Limitations
+
+- Pattern-based detection may miss obfuscated SQL injection payloads.
+- A suspicious request does not, by itself, prove successful data exfiltration.
+- The current `notify_only` response mode does not automatically block attacks.
 
 ## 7. Evaluation and evidence
 
