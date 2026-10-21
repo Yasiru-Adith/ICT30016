@@ -23,7 +23,7 @@ Collectors gather activity and produce events in a common format. The agent rece
 ### Shared components
 
 | Component | Purpose |
-|---|---|
+| --- | --- |
 | `agent.py` | Loads configuration and coordinates collection, processing, detection and response |
 | `edr/collectors/` | Collects activity and converts it into common events |
 | `edr/rules/` | Contains separate detection modules |
@@ -39,7 +39,7 @@ Collectors gather activity and produce events in a common format. The agent rece
 ### Collectors
 
 | Collector | What it gathers | Notes |
-|---|---|---|
+| --- | --- | --- |
 | Process | Newly observed and disappeared processes using `psutil` | Polling can miss short-lived processes |
 | Network | Newly observed connections using `psutil` | Does not inspect packet contents |
 | HTTP authentication | Juice Shop login requests and responses using TShark | Produces failed-login events for BA-001 |
@@ -207,7 +207,7 @@ Repeated failures indicate possible brute-force activity; they do not prove mali
 The commands below assume:
 
 | Setting | Example value |
-|---|---|
+| --- | --- |
 | Ubuntu project folder | `~/team-edr` |
 | Juice Shop IP | `192.168.100.100` |
 | Juice Shop port | `3000` |
@@ -351,7 +351,7 @@ Check the captured event timestamps. Slow requests can place the failures outsid
 Expand **Evidence and timing** in the dashboard to inspect:
 
 | Field | Meaning |
-|---|---|
+| --- | --- |
 | `source_ip` | Address that sent the login attempts |
 | `target_ip` and `target_port` | Monitored Juice Shop service |
 | `failed_attempts` | Number of failures supporting the alert |
@@ -421,6 +421,7 @@ The following template defines the documentation format for an additional detect
 [Link reviewed screenshots, sample events and measured results. Include code version and configuration. Do not include passwords or session tokens.]
 
 For basket enumeration, distinguish a request-based alert from confirmed unauthorised access. Confirmation requires successful access and evidence that the basket belongs to a different account.
+
 ### 6.1 SQLI-001: SQL Injection – Data Exfiltration
 
 **Contributor:** Sohana Tasnim Faiza  
@@ -495,7 +496,7 @@ Replace the timestamps before running. Use `--label normal` for normal/control t
 ### Detection metrics
 
 | Metric | Meaning |
-|---|---|
+| --- | --- |
 | Detection rate | TP / (TP + FN) |
 | False-positive rate | FP / (FP + TN) |
 | Evaluation MTTD | Average detection timestamp minus supplied trial start for detected attack trials |
@@ -522,5 +523,3 @@ Performance records include:
 - Dropped events.
 
 Agent CPU excludes TShark CPU, while system CPU includes other workloads. Compare idle and attack measurements before making performance claims.
-
-
