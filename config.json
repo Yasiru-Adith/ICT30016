@@ -1,0 +1,58 @@
+{
+  "database": "runs/live.db",
+  "poll_seconds": 5,
+  "queue_size": 2000,
+  "collectors": {
+    "process": {
+      "enabled": true
+    },
+    "network": {
+      "enabled": true
+    },
+    "files": {
+      "enabled": false,
+      "paths": [
+        "/tmp/edr-lab"
+      ]
+    },
+    "docker": {
+      "enabled": false,
+      "container": "juice-shop"
+    },
+    "system_auth": {
+      "enabled": false,
+      "unit": "ssh.service"
+    },
+    "http_auth": {
+      "enabled": true,
+      "interface": "any",
+      "target_ip": "192.168.241.128",
+      "port": 3000
+    }
+  },
+  "rules": {
+    "BA-001": {
+      "enabled": true,
+      "threshold": 5,
+      "window_seconds": 10
+    },
+    "SQLI-001": {
+      "enabled": true,
+      "severity": 4
+    },
+    "IDOR-001": {
+      "enabled": true,
+      "distinct_threshold": 3,
+      "window_seconds": 10
+    },
+    "IIV-001": {
+      "enabled": true,
+      "severity": 3,
+      "status_codes": [500],
+      "allowed_extensions": [".pdf", ".zip"]
+    }
+  },
+  "response": {
+    "mode": "notify_only"
+  }
+}
