@@ -384,44 +384,181 @@ Previous events and alerts remain visible. Allow more than ten seconds without f
 
 For independent evaluation trials, restart the agent and use a fresh database filename.
 
-## 6. Detection scenario template
+8 IDOR-001: Basket Enumeration (Broken Access Control)
 
-The following template defines the documentation format for an additional detection scenario. It describes no enabled capability until its placeholders are completed and its implementation is verified.
+**Contributor:** Devidboston Seang  
+**Category:** Broken Access Control (IDOR)  
+**Scope:** Detects one user reading several other users' baskets by changing the basket ID.
 
-### [Rule ID]: [Attack name]
+### Implementation
 
-**Contributor:** [Name]  
-**Category:** [Attack category]  
-**Implementation status:** [State verified support and any restrictions]
+The HTTP collector uses TShark to read Juice Shop requests. A `GET /rest/basket/<id>` request produces a `basket_access` event.
 
-#### Implementation
+The detection rule in `edr/rules/idor.py` generates a **Possible IDOR Basket Enumeration** alert when one source IP accesses **three or more different basket IDs within ten seconds**, grouped by monitored host and source IP.
 
-- **Files added or changed:** [Paths]
-- **Telemetry:** [Collector, event type and required fields]
-- **Detection condition:** [Exact conditions, grouping, threshold and window]
-- **Alert and response:** [What is generated and what action is actually taken]
-- **Detection limits:** [What the evidence can and cannot establish]
+The alert includes the supporting event IDs, the baskets accessed, and detection timing. The response handler records a notification; it does not automatically block the source.
 
-#### Setup and configuration
+Reading several different baskets indicates enumeration. It does not, by itself, prove the baskets belong to other accounts.
 
-[List dependencies, test accounts, required collector/rule settings and any additional setup.]
+### Requirements and Configuration
 
-#### Attack test
+- Ubuntu VM running Juice Shop and the EDR.
+- Kali VM with network access to Juice Shop.
+- HTTP collector enabled with the correct capture interface, target IP and port.
+- `IDOR-001` enabled with a three-basket threshold and ten-second window.
+- Response mode set to `notify_only`.
 
-1. [Start the EDR with the required configuration.]
-2. [State which VM runs the attack.]
-3. [Provide exact commands or script filename and arguments.]
-4. [State the expected events, alert and response.]
+The attack script is in the repository at `attack_scripts/idor_basket_enum.py`. Copy it to the Kali VM (or clone the project there) before running the attack.
 
-#### Normal or below-threshold test
+The commands below assume:
 
-[Provide repeatable steps and expected results using an independent test state.]
+| Setting | Example value |
+| --- | --- |
+| Ubuntu project folder | `~/team-edr` |
+| Capture interface | `ens33` |
+| Juice Shop IP | `192.168.100.104` |
+| Juice Shop port | `3000` |
+| Kali IP | `192.168.100.200` |
 
-#### Evidence and results
+Replace these values where they differ from the deployed lab environment. Run the tests only against an authorised lab instance.
 
-[Link reviewed screenshots, sample events and measured results. Include code version and configuration. Do not include passwords or session tokens.]
+### Test Accounts
 
-For basket enumeration, distinguish a request-based alert from confirmed unauthorised access. Confirmation requires successful access and evidence that the basket belongs to a different account.
+The tests use two accounts, `usera` and `userb`. Juice Shop seeds baskets 1–5 automatically, so on a freshly started Juice Shop the two accounts you register receive the next IDs: **usera gets basket 6** and **userb gets basket 7**. Register `usera` first, then `userb`, to keep these IDs consistent. Juice Shop resets its accounts on restart, so recreate them each session, either way:
+
+**On the Juice Shop website:** open `http://192.168.100.104:3000`, go to **Account → Login → Not yet a customer?**, and register `usera@test.com` then `userb@test.com` (password `Test1234!`).
+add an item to the basket if empty.
+**Or in a terminal:**
+
+```bash
+curl -s -X POST http://192.168.100.104:3000/api/Users/ -H 'Content-Type: application/json' \
+  -d '{"email":"usera@test.com","password":"Test1234!","passwordRepeat":"Test1234!"}'
+curl -s -X POST http://192.168.100.104:3000/api/Users/ -H 'Content-Type: application/json' \
+  -d '{"email":"userb@test.com","password":"Test1234!","passwordRepeat":"Test1234!"}'
+```
+
+Basket 6 is usera's own basket (used in the normal test). Baskets 1–5 and 7 belong to others (read during the attack test to confirm the IDOR).
+
+### Test A: Normal Activity
+
+This test checks that reading only your own basket does not trigger IDOR-001.
+
+#### 1. Configure an independent test
+
+Stop any running agent and dashboard with **Ctrl+C**. On Ubuntu:
+
+```bash
+cd ~/team-edr
+nano config.json
+```
+
+Set the `database` field to:
+
+```json
+"database": "runs/idor-normal-1.db",
+```
+
+#### 2. Start the agent
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python agent.py --config config.json
+```
+
+Check that the HTTP collector starts without an error.
+
+#### 3. Start the dashboard
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python dashboard.py --database runs/idor-normal-1.db
+```
+
+Open `http://127.0.0.1:8080` in the Ubuntu browser.
+
+#### 4. Read your own basket
+
+On Kali:
+
+```bash
+python3 idor_basket_enum.py \
+  --target-ip 192.168.100.104 --email usera@test.com --password 'Test1234!' \
+  --start-id 6 --end-id 6
+```
+
+#### Expected Result
+
+- Basket 6 is accessible.
+- `basket_access` events are recorded.
+- No IDOR-001 alert.
+
+### Test B: Basket Enumeration Attack
+
+This test checks that reading three or more baskets within ten seconds triggers IDOR-001.
+
+#### 1. Start an independent test
+
+Stop the agent and dashboard with **Ctrl+C**. On Ubuntu, change the `database` field to:
+
+```json
+"database": "runs/idor-attack-1.db",
+```
+
+#### 2. Restart the agent and dashboard
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python agent.py --config config.json
+```
+
+```bash
+cd ~/team-edr
+sudo .venv/bin/python dashboard.py --database runs/idor-attack-1.db
+```
+
+Refresh `http://127.0.0.1:8080` and confirm the HTTP collector has started.
+
+#### 3. Enumerate baskets
+
+On Kali:
+
+```bash
+python3 idor_basket_enum.py \
+  --target-ip 192.168.100.104 --email usera@test.com --password 'Test1234!' \
+  --start-id 1 --end-id 7
+```
+
+#### Expected Result
+
+- Baskets 1–7 are accessible using one account's token.
+- One IDOR-001 alert linked to the first three distinct baskets.
+- One recorded notification response.
+
+### Alert Evidence and Timing
+
+Expand **Evidence and timing** in the dashboard to inspect:
+
+| Field | Meaning |
+| --- | --- |
+| `source_ip` | Address that sent the basket requests |
+| `target_ip` and `target_port` | Monitored Juice Shop service |
+| `distinct_baskets` | Number of different baskets accessed |
+| `basket_ids` | The basket IDs that were read |
+| `window_seconds` | Configured detection window |
+| `evidence_event_ids` | Identifiers linking the alert to its supporting events |
+| `attack_to_detection_seconds` | Time from the first basket request to alert generation |
+| `threshold_to_detection_seconds` | Time from the third distinct basket to alert generation |
+| `synthetic` | `false` for live monitoring evidence |
+
+In one observed live trial, the alert was generated approximately **0.41 seconds after the first basket request**, or **0.36 seconds after the third distinct basket**. These are individual trial measurements, not guaranteed performance.
+
+### Evidence to Retain
+
+- Kali terminal output showing the baskets accessed.
+- The matching `basket_access` events.
+- The dashboard alert and notification response for the attack test.
+- Evidence that the normal test recorded basket reads without an IDOR-001 alert.
+- The code version, configuration, database filename and test timestamps.
 
 ## 7 SQLI-001: SQL Injection – Data Exfiltration
 
