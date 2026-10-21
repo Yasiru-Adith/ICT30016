@@ -1,11 +1,13 @@
 from edr.rules.broken_auth import BrokenAuth
 from edr.rules.sqli_exfiltration import SQLiExfiltration
 from edr.rules.idor import IDOR
+from edr.rules.improper_input import ImproperInputValidation
 
 RULES = {
     "BA-001": BrokenAuth,
     "SQLI-001": SQLiExfiltration,
     "IDOR-001": IDOR,
+    "IIV-001": ImproperInputValidation,
 }
 
 
