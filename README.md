@@ -6,7 +6,7 @@ This README covers the EDR architecture, installation and operation, followed by
 
 ## Contents
 
-1. [EDR Tool implementation](#1-common-edr-implementation)
+1. [EDR Tool implementation](#1-edr-tool-implementation)
 2. [Installation and configuration](#2-installation-and-configuration)
 3. [Running the EDR](#3-running-the-edr)
 4. [Detection module interface](#4-detection-module-interface)
@@ -14,6 +14,7 @@ This README covers the EDR architecture, installation and operation, followed by
 6. [IDOR-001: Basket Enumeration (Broken Access Control)](#8-idor-001-basket-enumeration-broken-access-control)
 7. [SQLI-001: SQL Injection – Data Exfiltration](#7-sqli-001-sql-injection--data-exfiltration)
 8. [Evaluation and evidence](#8-evaluation-and-evidence)
+9. [AFW-002: Arbitrary File Write 2](#9-arbitrary-file-write-2)
 
 ## 1. EDR Tool implementation
 
@@ -618,6 +619,58 @@ curl -G 'http://192.168.241.128:3000/rest/products/search' \
 - The current `notify_only` response mode does not automatically block attacks.
 
 
+## 9. Arbitrary File Write 2
+
+### 9.1 Implementation
+
+The AFW2 detection rule is implemented in `edr/rules/afw.py`.
+
+The rule detects a possible Arbitrary File Write 2 attack by correlating two artefacts collected by the EDR agent:
+
+1. An HTTP `POST` request to the Juice Shop `/file-upload` endpoint.
+2. A subsequent modification of the targeted `legal.md` file.
+
+The rule uses the existing HTTP and filesystem event collectors rather than creating separate collectors. It maintains recent upload and file-modification events and compares their timestamps.
+
+An alert is generated when the two events occur within the configured correlation window. This prevents a normal file upload or an unrelated file modification from automatically being classified as an AFW2 attack.
+
+The rule generates an `AFW2-001` alert containing the relevant evidence event IDs, source and target information, timestamps and the affected file path.
+
+### 9.2 Requirements and Configuration
+
+The AFW2 rule requires the following components of the EDR agent to be enabled:
+
+- HTTP/network event collection using `tshark`
+- Filesystem event collection
+- Juice Shop running and accessible to the EDR agent
+- `AFW2-001` enabled in `config.json`
+
+The rule uses a configurable correlation window. The default value is **10 seconds**.
+
+The rule is registered with the EDR rule registry so that it receives events alongside the existing Broken Authentication, SQL Injection and IDOR detection rules.
+
+### 9.3 Testing
+
+#### Test A – Normal Activity
+
+Perform normal Juice Shop activity without attempting to modify the protected `legal.md` file.
+
+**Expected result:**
+
+No `AFW2-001` alert should be generated.
+
+This test verifies that normal application activity does not trigger the AFW2 detection.
+
+#### Test B – AFW2 Attack
+
+Perform the authorised Arbitrary File Write 2 attack against the Juice Shop instance.
+
+The attack uses the file-upload functionality and sends a crafted ZIP archive containing the path-traversal filename:
+
+```text
+../../ftp/legal.md
+
+
 ## 8. Evaluation and evidence
 
 Record controlled attack and normal trials with actual UTC start/end times. Allow observation time for delayed alerts.
@@ -662,3 +715,50 @@ Performance records include:
 - Dropped events.
 
 Agent CPU excludes TShark CPU, while system CPU includes other workloads. Compare idle and attack measurements before making performance claims.
+
+
+## 8. Evaluation and evidence
+
+Record controlled attack and normal trials with actual UTC start/end times. Allow observation time for delayed alerts.
+
+Example:
+
+```bash
+sudo .venv/bin/python evaluate.py --database runs/ba-attack-1.db \
+  --trial-id ba-attack-1 --scenario broken-auth --rule BA-001 --label attack \
+  --start 'ACTUAL_START_UTC' --end 'ACTUAL_END_UTC'
+```
+
+Replace the timestamps before running. Use `--label normal` for normal/control trials. Duplicate IDs and overlapping windows for the same rule are rejected.
+
+### Detection metrics
+
+| Metric | Meaning |
+| --- | --- |
+| Detection rate | TP / (TP + FN) |
+| False-positive rate | FP / (FP + TN) |
+| Evaluation MTTD | Average detection timestamp minus supplied trial start for detected attack trials |
+| BA alert timing | Time from the first observed failed-login response and from the threshold-satisfying response |
+
+BA alert timings differ from trial-start MTTD.
+
+The evaluator does not launch attacks or prove alert attribution. Review evidence manually and avoid unrelated simultaneous activity. Missed attacks count as false negatives and receive no invented detection time.
+
+Use fresh agent/database instances for independent tests.
+
+For repeated trials in one experiment database, use nonoverlapping windows and allow more than ten seconds between BA trials to re-arm.
+
+Cross-database aggregation is not implemented. Consolidate reviewed results separately if using separate databases.
+
+### Performance monitoring
+
+Performance records include:
+
+- Agent CPU usage.
+- Agent and child-process memory usage.
+- System CPU usage.
+- Queue depth.
+- Dropped events.
+
+Agent CPU excludes TShark CPU, while system CPU includes other workloads. Compare idle and attack measurements before making performance claims.
+

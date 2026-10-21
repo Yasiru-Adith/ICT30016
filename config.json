@@ -45,11 +45,20 @@
       "distinct_threshold": 3,
       "window_seconds": 10
     },
+    "AFW2-001": {
+      "enabled": true,
+      "window_seconds": 10
+    },
     "IIV-001": {
       "enabled": true,
       "severity": 3,
-      "status_codes": [500],
-      "allowed_extensions": [".pdf", ".zip"]
+      "status_codes": [
+        500
+      ],
+      "allowed_extensions": [
+        ".pdf",
+        ".zip"
+      ]
     }
   },
   "response": {
