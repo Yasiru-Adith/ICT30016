@@ -44,7 +44,11 @@
       "enabled": true,
       "distinct_threshold": 3,
       "window_seconds": 10
-    }
+    },
+    "AFW2-001": {
+      "enabled": true,
+      "window_seconds": 10
+    },
   },
   "response": {
     "mode": "notify_only"
