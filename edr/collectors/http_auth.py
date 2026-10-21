@@ -1,4 +1,3 @@
-
 from collections import defaultdict, deque
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -12,6 +11,7 @@ from edr.core import utc as stamp
 
 def identifier():
     return str(uuid4())
+
 
 BASKET_PATH = re.compile(r'^/rest/basket/(\d+)(?:\?.*)?$')
 
@@ -141,6 +141,40 @@ class AuthenticationCollector:
                     "request_path": "/rest/user/login",
                     "tcp_stream": stream,
                     "frame_number": frame,
+                },
+            }
+
+        # IIV-001: expose the response for POST /file-upload.
+        # This is additive only and does not alter existing detector behaviour.
+        if (
+            request_method == "POST"
+            and urlsplit(request_uri).path == "/file-upload"
+        ):
+            try:
+                http_status = int(status)
+            except ValueError:
+                return None
+
+            return {
+                "schema_version": 1,
+                "source": "http_auth",
+                "event_id": identifier(),
+                "event_type": "file_upload_response",
+                "event_timestamp": stamp(observed),
+                "collector_timestamp": stamp(),
+                "host": self.host,
+                "data": {
+                    "service": "juice_shop",
+                    "source_ip": client,
+                    "target_ip": target,
+                    "target_port": self.port,
+                    "request_method": request_method,
+                    "request_uri": request_uri,
+                    "request_path": "/file-upload",
+                    "http_status": http_status,
+                    "tcp_stream": stream,
+                    "request_frame_number": request_frame,
+                    "response_frame_number": frame,
                 },
             }
 
