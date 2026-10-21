@@ -12,7 +12,8 @@ This README covers the EDR architecture, installation and operation, followed by
 4. [Detection module interface](#4-detection-module-interface)
 5. [BA-001: Repeated failed logins](#5-ba-001-repeated-failed-logins)
 6. [Detection scenario template](#6-detection-scenario-template)
-7. [Evaluation and evidence](#7-evaluation-and-evidence)
+7. [SQLI-001: SQL Injection – Data Exfiltration](#7-sqli-001-sql-injection--data-exfiltration)
+8. [Evaluation and evidence](#7-evaluation-and-evidence)
 
 ## 1. EDR Tool implementation
 
@@ -422,7 +423,7 @@ The following template defines the documentation format for an additional detect
 
 For basket enumeration, distinguish a request-based alert from confirmed unauthorised access. Confirmation requires successful access and evidence that the basket belongs to a different account.
 
-## 6.1 SQLI-001: SQL Injection – Data Exfiltration
+## 7 SQLI-001: SQL Injection – Data Exfiltration
 
 **Contributor:** Sohana Tasnim Faiza  
 **Category:** SQL Injection  
@@ -479,7 +480,7 @@ curl -G 'http://192.168.241.128:3000/rest/products/search' \
 - A suspicious request does not, by itself, prove successful data exfiltration.
 - The current `notify_only` response mode does not automatically block attacks.
 
-## 7. Evaluation and evidence
+## 8. Evaluation and evidence
 
 Record controlled attack and normal trials with actual UTC start/end times. Allow observation time for delayed alerts.
 
