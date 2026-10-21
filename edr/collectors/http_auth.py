@@ -1,4 +1,3 @@
-
 from collections import defaultdict, deque
 from urllib.parse import urlsplit
 from uuid import uuid4
@@ -13,7 +12,21 @@ from edr.core import utc as stamp
 def identifier():
     return str(uuid4())
 
+
 BASKET_PATH = re.compile(r'^/rest/basket/(\d+)(?:\?.*)?$')
+FILENAME_PATTERN = re.compile(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)', re.IGNORECASE)
+
+
+def upload_filename(content_disposition):
+    """Extract a multipart upload filename from Content-Disposition."""
+    if not content_disposition:
+        return None
+
+    match = FILENAME_PATTERN.search(content_disposition)
+    if not match:
+        return None
+
+    return match.group(1).strip()
 
 
 class AuthenticationCollector:
@@ -26,15 +39,33 @@ class AuthenticationCollector:
     def parse(self, line):
         values = line.rstrip("\r\n").split("\t")
 
-        if len(values) != 10:
+        # The first 10 fields are the original shared collector format.
+        # The final two fields are additive multipart metadata for IIV-001.
+        if len(values) < 10:
             return None
 
-        timestamp, stream, src, dst, sport, dport, method, uri, status, frame = values
+        values += [""] * (12 - len(values))
+        (
+            timestamp,
+            stream,
+            src,
+            dst,
+            sport,
+            dport,
+            method,
+            uri,
+            status,
+            frame,
+            content_disposition,
+            part_content_type,
+        ) = values[:12]
 
         try:
             observed = float(timestamp)
         except (ValueError, TypeError):
             return None
+
+        filename = upload_filename(content_disposition)
 
         # IDOR-001: detect access to a Juice Shop basket.
         if method == "GET" and dst == self.target and dport == str(self.port):
@@ -63,7 +94,7 @@ class AuthenticationCollector:
         # Remove requests that have been waiting too long for a response.
         for key in list(self.pending):
             requests = self.pending[key]
-            while requests and observed - requests[0][0] > 60:
+            while requests and observed - requests[0]["observed"] > 60:
                 requests.popleft()
             if not requests:
                 del self.pending[key]
@@ -72,7 +103,37 @@ class AuthenticationCollector:
         if method and dst == self.target and dport == str(self.port):
             parsed_path = urlsplit(uri).path
 
-            request_event = {
+            data = {
+                "service": "juice_shop",
+                "source_ip": src,
+                "target_ip": dst,
+                "target_port": self.port,
+                "request_method": method,
+                "request_uri": uri,
+                "request_path": parsed_path,
+                "tcp_stream": stream,
+                "frame_number": frame,
+            }
+
+            # Multipart metadata is included only when TShark exposes it.
+            if parsed_path == "/file-upload":
+                if filename:
+                    data["upload_filename"] = filename
+                if part_content_type:
+                    data["upload_mime_type"] = part_content_type
+
+            self.pending[stream].append({
+                "observed": observed,
+                "client": src,
+                "target": dst,
+                "method": method,
+                "uri": uri,
+                "frame": frame,
+                "upload_filename": filename,
+                "upload_mime_type": part_content_type or None,
+            })
+
+            return {
                 "schema_version": 1,
                 "source": "http_auth",
                 "event_id": identifier(),
@@ -80,25 +141,47 @@ class AuthenticationCollector:
                 "event_timestamp": stamp(observed),
                 "collector_timestamp": stamp(),
                 "host": self.host,
-                "data": {
-                    "service": "juice_shop",
-                    "source_ip": src,
-                    "target_ip": dst,
-                    "target_port": self.port,
-                    "request_method": method,
-                    "request_uri": uri,
-                    "request_path": parsed_path,
-                    "tcp_stream": stream,
-                    "frame_number": frame,
-                },
+                "data": data,
             }
 
-            # Keep request information to pair it with a later response.
-            self.pending[stream].append(
-                (observed, src, dst, method, uri, frame)
-            )
+        # Multipart data can be dissected on a later TCP frame than the HTTP
+        # request headers. Update the pending request and emit a dedicated
+        # metadata event without changing the existing HTTP event types.
+        if (
+            filename
+            and dst == self.target
+            and dport == str(self.port)
+            and self.pending.get(stream)
+        ):
+            request = self.pending[stream][-1]
+            request_path = urlsplit(request["uri"]).path
 
-            return request_event
+            if request["method"] == "POST" and request_path == "/file-upload":
+                request["upload_filename"] = filename
+                request["upload_mime_type"] = part_content_type or None
+
+                return {
+                    "schema_version": 1,
+                    "source": "http_auth",
+                    "event_id": identifier(),
+                    "event_type": "file_upload_metadata",
+                    "event_timestamp": stamp(observed),
+                    "collector_timestamp": stamp(),
+                    "host": self.host,
+                    "data": {
+                        "service": "juice_shop",
+                        "source_ip": request["client"],
+                        "target_ip": request["target"],
+                        "target_port": self.port,
+                        "request_method": request["method"],
+                        "request_uri": request["uri"],
+                        "request_path": request_path,
+                        "upload_filename": filename,
+                        "upload_mime_type": part_content_type or None,
+                        "tcp_stream": stream,
+                        "frame_number": frame,
+                    },
+                }
 
         # Ignore rows that aren't HTTP responses from the target.
         if not status or src != self.target or sport != str(self.port):
@@ -116,7 +199,13 @@ class AuthenticationCollector:
         if not requests:
             self.pending.pop(stream, None)
 
-        _, client, target, request_method, request_uri, request_frame = request
+        client = request["client"]
+        target = request["target"]
+        request_method = request["method"]
+        request_uri = request["uri"]
+        request_frame = request["frame"]
+        filename = request.get("upload_filename")
+        upload_mime_type = request.get("upload_mime_type")
 
         # Preserve the existing failed-login event for BA-001.
         if (
@@ -144,6 +233,47 @@ class AuthenticationCollector:
                 },
             }
 
+        # IIV-001: expose the response for POST /file-upload.
+        # This remains additive and does not alter existing rule behaviour.
+        if (
+            request_method == "POST"
+            and urlsplit(request_uri).path == "/file-upload"
+        ):
+            try:
+                http_status = int(status)
+            except ValueError:
+                return None
+
+            data = {
+                "service": "juice_shop",
+                "source_ip": client,
+                "target_ip": target,
+                "target_port": self.port,
+                "request_method": request_method,
+                "request_uri": request_uri,
+                "request_path": "/file-upload",
+                "http_status": http_status,
+                "tcp_stream": stream,
+                "request_frame_number": request_frame,
+                "response_frame_number": frame,
+            }
+
+            if filename:
+                data["upload_filename"] = filename
+            if upload_mime_type:
+                data["upload_mime_type"] = upload_mime_type
+
+            return {
+                "schema_version": 1,
+                "source": "http_auth",
+                "event_id": identifier(),
+                "event_type": "file_upload_response",
+                "event_timestamp": stamp(observed),
+                "collector_timestamp": stamp(),
+                "host": self.host,
+                "data": data,
+            }
+
         return None
 
 
@@ -159,6 +289,8 @@ def capture_command(interface, target, port):
         "http.request.uri",
         "http.response.code",
         "frame.number",
+        "mime_multipart.header.content-disposition",
+        "mime_multipart.header.content-type",
     ]
 
     command = [
@@ -172,7 +304,7 @@ def capture_command(interface, target, port):
         "-d",
         f"tcp.port=={port},http",
         "-Y",
-        "http.request or http.response",
+        "http.request or http.response or mime_multipart",
         "-T",
         "fields",
         "-E",
