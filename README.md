@@ -422,7 +422,7 @@ The following template defines the documentation format for an additional detect
 
 For basket enumeration, distinguish a request-based alert from confirmed unauthorised access. Confirmation requires successful access and evidence that the basket belongs to a different account.
 
-### 6.1 SQLI-001: SQL Injection – Data Exfiltration
+## 6.1 SQLI-001: SQL Injection – Data Exfiltration
 
 **Contributor:** Sohana Tasnim Faiza  
 **Category:** SQL Injection  
