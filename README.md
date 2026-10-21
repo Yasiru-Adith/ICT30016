@@ -13,7 +13,7 @@ This README covers the EDR architecture, installation and operation, followed by
 5. [BA-001: Repeated failed logins](#5-ba-001-repeated-failed-logins)
 6. [IDOR-001: Basket Enumeration (Broken Access Control)](#8-idor-001-basket-enumeration-broken-access-control)
 7. [SQLI-001: SQL Injection – Data Exfiltration](#7-sqli-001-sql-injection--data-exfiltration)
-8. [Evaluation and evidence](#7-evaluation-and-evidence)
+8. [Evaluation and evidence](#8-evaluation-and-evidence)
 
 ## 1. EDR Tool implementation
 
