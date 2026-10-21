@@ -1,7 +1,7 @@
 from edr.rules.broken_auth import BrokenAuth
 from edr.rules.sqli_exfiltration import SQLiExfiltration
 from edr.rules.idor import IDOR
-from edr.rules.afw import AFW2
+from edr.rules.afw2 import AFW2
 from edr.rules.improper_input import ImproperInputValidation
 
 
