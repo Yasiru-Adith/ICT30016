@@ -618,7 +618,7 @@ curl -G 'http://192.168.241.128:3000/rest/products/search' \
 - The current `notify_only` response mode does not automatically block attacks.
 
 
-## 9. Evaluation and evidence
+## 8. Evaluation and evidence
 
 Record controlled attack and normal trials with actual UTC start/end times. Allow observation time for delayed alerts.
 
