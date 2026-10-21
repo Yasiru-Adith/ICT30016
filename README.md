@@ -11,10 +11,11 @@ This README covers the EDR architecture, installation and operation, followed by
 3. [Running the EDR](#3-running-the-edr)
 4. [Detection module interface](#4-detection-module-interface)
 5. [BA-001: Repeated failed logins](#5-ba-001-repeated-failed-logins)
-6. [IDOR-001: Basket Enumeration (Broken Access Control)](#8-idor-001-basket-enumeration-broken-access-control)
-7. [SQLI-001: SQL Injection – Data Exfiltration](#7-sqli-001-sql-injection--data-exfiltration)
-8. [Evaluation and evidence](#8-evaluation-and-evidence)
+6. [IIV-001: Improper Input Validation – File Upload Type](#6-iiv-001-improper-input-validation--file-upload-type)
+7. [IDOR-001: Basket Enumeration (Broken Access Control)](#8-idor-001-basket-enumeration-broken-access-control)
+8. [SQLI-001: SQL Injection – Data Exfiltration](#7-sqli-001-sql-injection--data-exfiltration)
 9. [AFW-002: Arbitrary File Write 2](#9-arbitrary-file-write-2)
+10. [Evaluation and evidence](#8-evaluation-and-evidence)
 
 ## 1. EDR Tool implementation
 
@@ -384,6 +385,159 @@ An existing database such as `runs/live.db` may be reused for demonstrations. Th
 Previous events and alerts remain visible. Allow more than ten seconds without failed-login activity between demonstrations and identify new alerts by their timestamps.
 
 For independent evaluation trials, restart the agent and use a fresh database filename.
+
+
+## 6 IIV-001: Improper Input Validation – File Upload Type
+
+**Contributor:** Maxwell Forrestal  
+**Category:** Improper Input Validation / File Upload Type  
+**Scope:** Detects file uploads to Juice Shop that use a disallowed filename extension and retains abnormal HTTP response detection as a secondary indicator.
+
+### Implementation
+
+The existing shared HTTP collector in `edr/collectors/http_auth.py` is extended to inspect Juice Shop `/file-upload` traffic using TShark. The collector continues to produce the existing events used by the other detection modules and additionally exposes multipart upload metadata, including the uploaded filename and MIME type, when available.
+
+The detection rule is implemented in `edr/rules/improper_input.py` and registered as `IIV-001` in `edr/rules/registry.py`.
+
+The rule uses two detection paths:
+
+1. **Disallowed file extension:** A `POST /file-upload` request containing a filename whose extension is not in the configured allowlist generates an alert with the reason `disallowed_file_extension`.
+2. **Abnormal upload response:** A `/file-upload` request that receives a configured abnormal HTTP response, currently HTTP `500`, generates an alert with the reason `abnormal_upload_response`.
+
+The default allowed extensions are `.pdf` and `.zip`. These values are configurable in `config.json`.
+
+The rule avoids generating a second IIV alert for the same observed upload stream when the disallowed-extension condition has already produced an alert and the request later produces an abnormal response.
+
+The configured `notify_only` response mode records the alert and recommendation without automatically blocking the source or modifying the uploaded file.
+
+### Requirements and Configuration
+
+- Ubuntu VM running Juice Shop and the EDR.
+- Kali VM with network access to Juice Shop.
+- TShark installed on Ubuntu.
+- HTTP collector enabled with the correct capture interface, Juice Shop IP and port.
+- `IIV-001` enabled in `config.json`.
+- Response mode set to `notify_only`.
+
+Confirm that the installed TShark version exposes the multipart fields used by the collector:
+
+```bash
+tshark -G fields | grep "mime_multipart.header.content-disposition"
+tshark -G fields | grep "mime_multipart.header.content-type"
+```
+
+The relevant rule configuration is:
+
+```json
+"IIV-001": {
+  "enabled": true,
+  "severity": 3,
+  "status_codes": [500],
+  "allowed_extensions": [
+    ".pdf",
+    ".zip"
+  ]
+}
+```
+
+Set the HTTP collector's `target_ip` to the actual Juice Shop VM address before testing. The examples below use `192.168.100.100`; replace it with the current lab address.
+
+Start the EDR agent and dashboard using Section 3 of this README.
+
+### Test A: Allowed File-Type Control
+
+This test checks that an allowed `.zip` upload does not trigger IIV-001.
+
+On Kali:
+
+```bash
+cd ~/Desktop
+echo "Allowed upload test" > allowed.txt
+zip -q allowed.zip allowed.txt
+
+curl -i \
+  -F "file=@/home/maxwell/Desktop/allowed.zip;type=application/zip" \
+  http://192.168.100.100:3000/file-upload
+```
+
+**Expected result:**
+
+- The request is visible to the HTTP collector.
+- The `.zip` extension is in the configured allowlist.
+- No `IIV-001` alert is generated.
+
+### Test B: Disallowed File-Type Upload
+
+This test checks that a structurally valid multipart upload using a disallowed `.txt` extension triggers IIV-001.
+
+On Kali:
+
+```bash
+cd ~/Desktop
+echo "ICT30016 improper input validation test" > test.txt
+
+curl -i \
+  -F "file=@/home/maxwell/Desktop/test.txt;type=text/plain" \
+  http://192.168.100.100:3000/file-upload
+```
+
+**Expected result:**
+
+- The collector observes `POST /file-upload`.
+- The multipart metadata exposes the filename `test.txt`.
+- The rule identifies `.txt` as outside the configured `.pdf` and `.zip` allowlist.
+- An `IIV-001` alert is generated with the reason `disallowed_file_extension`.
+
+### Test C: Malformed Upload / HTTP 500 Fallback
+
+This test verifies the secondary abnormal-response detection path.
+
+Using Firefox Developer Tools on Kali:
+
+1. Perform a file upload to create a `POST /file-upload` request.
+2. Open **Network**, select the upload request and use **Edit and Resend**.
+3. Keep the request directed to `/file-upload` but make the multipart form incomplete, such as by removing its final closing boundary.
+4. Resend the request.
+
+**Expected result:**
+
+- Juice Shop returns HTTP `500`.
+- The collector creates the corresponding upload-response event.
+- `IIV-001` generates an alert with the reason `abnormal_upload_response`.
+
+This fallback identifies abnormal upload behaviour; it does not by itself prove that a restricted file was successfully stored.
+
+### Integration Test
+
+Run the agent with `BA-001`, `SQLI-001`, `IDOR-001` and `IIV-001` enabled together.
+
+After confirming that the IIV tests still behave as expected, generate five failed Juice Shop login attempts using the BA-001 procedure in Section 5.
+
+**Expected result:**
+
+- The file-upload test generates `IIV-001`.
+- The failed-login sequence generates `BA-001`.
+- The failed-login sequence does not generate `IIV-001`.
+- Both detections operate through the same agent, HTTP collector, storage and dashboard pipeline.
+
+### Evidence and Results
+
+- Automated test command: `.venv/bin/python -m unittest discover -s tests -v`
+- **Automated result:** 22 tests passed (`OK`).
+- A live `.txt` upload generated an `IIV-001` alert using the `disallowed_file_extension` detection path.
+- A live allowed `.zip` control upload did not generate an `IIV-001` alert.
+- A malformed upload producing HTTP `500` generated `IIV-001` using the `abnormal_upload_response` fallback.
+- During integration testing, both `IIV-001` and `BA-001` generated their expected alerts while running in the same EDR agent.
+- Evidence retained includes the Kali request/output, dashboard alerts, event details and automated test output.
+
+### Limitations
+
+- The file-type rule validates the observed filename extension; it does not inspect the uploaded file contents to prove that the content matches the extension or MIME type.
+- The detector currently focuses on the Juice Shop `/file-upload` endpoint rather than every possible Improper Input Validation issue in the application.
+- Multipart filename detection depends on TShark exposing the required `mime_multipart` fields.
+- The HTTP `500` path is a secondary indicator of abnormal upload behaviour and does not by itself prove a successful validation bypass.
+- `notify_only` records detections and recommendations but does not automatically block the source or quarantine files.
+
 
 ## 8 IDOR-001: Basket Enumeration (Broken Access Control)
 
